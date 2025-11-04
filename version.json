@@ -1,8 +1,8 @@
 ﻿{
   "versionName": "1.0",
   "versionCode": 1,
-  "downloadUrl": "涓存椂URL锛岀◢鍚庢洿鏂?,
-  "updateMessage": "鑲ョ尗妗屽疇棣栨鍙戝竷\n- 妗岄潰瀹犵墿鍔熻兘\n- 浜掑姩鍔ㄧ敾\n- 鑷姩鏇存柊鏀寔",
+  "downloadUrl": "https://github.com/feitianshu91/fatcat/releases/download/v1.0/FatCat_v1.0.apk",
+  "updateMessage": "肥猫桌宠首次发布\n- 桌面宠物功能\n- 互动动画\n- 自动更新支持",
   "forceUpdate": false,
   "fileSize": 5242880
 }
