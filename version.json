@@ -4,5 +4,5 @@
   "downloadUrl": "https://gitee.com/long-anxiang/fatcat/releases/download/v1.5/FatCat_v1.5.apk",
   "updateMessage": "v1.5 更新内容：\n• ✨ 删除实用工具页面，界面更简洁\n• 🐱 优化宠物状态逻辑，更符合现实\n  - 移动时口渴下降更快（运动失水）\n  - 睡眠时口渴和饥饿会缓慢下降\n  - 采用8小时安全线设计（移动4小时，静止13小时）\n• 💬 增强低状态提醒系统\n  - 状态低于20时紧急提醒（30秒一次）\n  - 状态低于30时正常提醒（60秒一次）\n  - 新增紧急提醒语音（\"主人，我饿了，想吃好吃的\"）\n• 🐞 修复代码警告，提升应用质量\n• 🔧 修复自动更新检测URL（使用Gitee，国内访问更快）\n\n使用 Gitee 托管，国内下载更快！",
   "forceUpdate": false,
-  "fileSize": 8883989
+  "fileSize": 12258373
 }
