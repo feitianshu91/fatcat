@@ -23,18 +23,16 @@ import com.example.fatcat.model.SpeechTrigger
 import com.example.fatcat.ui.pet.DanmakuOverlay
 import com.example.fatcat.ui.pet.FloatingPetView
 import com.example.fatcat.ui.pet.SpeechBubbleOverlay
-import com.example.fatcat.ui.pet.QuickMenuOverlay
-import com.example.fatcat.ui.pet.QuickMenuItem
 import com.example.fatcat.utils.Constants
 import com.example.fatcat.utils.DanmakuGenerator
 import com.example.fatcat.utils.MovementHelper
 import com.example.fatcat.utils.PetManager
 import com.example.fatcat.utils.SpeechGenerator
-import com.example.fatcat.utils.ComposeWindowHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.mutableStateListOf
@@ -56,14 +54,12 @@ class FloatingPetService : Service() {
     // 弹幕窗口（全屏，不可触摸）
     private lateinit var danmakuFloatingView: FrameLayout
     private lateinit var danmakuLayoutParams: WindowManager.LayoutParams
+    private var isDanmakuWindowAdded = false  // 跟踪弹幕窗口是否已添加
     
     // 对话窗口（显示在宠物上方）
     private lateinit var speechFloatingView: FrameLayout
     private lateinit var speechLayoutParams: WindowManager.LayoutParams
-    
-    // 快捷菜单窗口（全屏）
-    private lateinit var quickMenuFloatingView: FrameLayout
-    private lateinit var quickMenuLayoutParams: WindowManager.LayoutParams
+    private var isSpeechWindowAdded = false  // 跟踪对话窗口是否已添加
     
     private var serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val petManager by lazy { PetManager.getInstance(this) }
@@ -96,6 +92,7 @@ class FloatingPetService : Service() {
     private val currentSpeech = mutableStateOf<PetSpeech?>(null)
     private var speechJob: Job? = null
     private var lastSpeechTime = 0L
+    @Volatile
     private var triggerSpeechAction: SpeechTrigger? = null
     
     // 宠物位置状态（用于对话气泡跟随）
@@ -104,30 +101,76 @@ class FloatingPetService : Service() {
     @Suppress("AutoboxingStateCreation")
     private val petPositionY = mutableStateOf(0)
     
-    // 快捷菜单状态
-    private val showQuickMenu = mutableStateOf(false)  // 快捷菜单显示
-    
     override fun onCreate() {
         super.onCreate()
         
-        // 先启动前台服务（必须在5秒内调用，否则会被系统杀死）
-        startForeground(1, createNotification())
+        android.util.Log.d("FloatingPetService", "🟢 服务创建开始")
         
         try {
-            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-            createPetWindow()       // 创建宠物窗口
-            createDanmakuWindow()   // 创建弹幕窗口
-            createSpeechWindow()    // 创建对话窗口
-            createQuickMenuWindow() // 创建快捷菜单窗口
-            updateQuickMenuVisibility()  // ⭐ 确保快捷菜单初始状态为不可触摸
-            startPetUpdates()
-            startAutoMovement()
-            startDanmakuListener()  // ⭐ 启动弹幕监听器（等待触发）
-            startSpeechMonitor()    // 启动对话监听器
+            // 先启动前台服务（必须在5秒内调用，否则会被系统杀死）
+            startForeground(1, createNotification())
+            android.util.Log.d("FloatingPetService", "✅ 前台服务已启动")
+            
+            // 初始化WindowManager
+            windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager 
+                ?: throw IllegalStateException("无法获取 WindowManager")
+            
+            // 创建窗口（按顺序，便于错误回滚）
+            try {
+                createPetWindow()
+                android.util.Log.d("FloatingPetService", "✅ 宠物窗口创建成功")
+                
+                createDanmakuWindow()
+                android.util.Log.d("FloatingPetService", "✅ 弹幕窗口创建成功")
+                
+                createSpeechWindow()
+                android.util.Log.d("FloatingPetService", "✅ 对话窗口创建成功")
+                
+                // 启动所有后台任务
+                startPetUpdates()
+                startAutoMovement()
+                startDanmakuListener()
+                startSpeechMonitor()
+                
+                android.util.Log.d("FloatingPetService", "🟢 服务创建完成")
+                
+            } catch (e: SecurityException) {
+                android.util.Log.e("FloatingPetService", "❌ 权限错误：$e", e)
+                // 清理已创建的资源
+                cleanupOnCreateError()
+                throw e
+                
+            } catch (e: Exception) {
+                android.util.Log.e("FloatingPetService", "❌ 创建窗口失败：$e", e)
+                // 清理已创建的资源
+                cleanupOnCreateError()
+                throw e
+            }
+            
         } catch (e: Exception) {
-            android.util.Log.e("FloatingPetService", "创建浮动视图失败", e)
-            // 即使创建失败，也要保持服务运行
+            android.util.Log.e("FloatingPetService", "❌ 服务初始化失败，服务将停止", e)
+            // 停止服务
             stopSelf()
+        }
+    }
+    
+    /**
+     * onCreate 失败时清理资源
+     */
+    private fun cleanupOnCreateError() {
+        android.util.Log.d("FloatingPetService", "🧹 清理失败的初始化...")
+        try {
+            // 停止所有任务
+            moveJob?.cancel()
+            happyAnimationJob?.cancel()
+            danmakuJob?.cancel()
+            speechJob?.cancel()
+            
+            // 移除已创建的窗口
+            removeAllWindows()
+            
+        } catch (e: Exception) {
+            android.util.Log.w("FloatingPetService", "清理时出错", e)
         }
     }
     
@@ -275,12 +318,6 @@ class FloatingPetService : Service() {
                         // 双击
                         android.util.Log.d("FloatingPetService", "Compose: 双击宠物")
                         playHappyJumpAnimation()
-                    },
-                    onLongPress = {
-                        // 长按
-                        android.util.Log.d("FloatingPetService", "Compose: 长按宠物")
-                        showQuickMenu.value = true
-                        updateQuickMenuVisibility()
                     }
                 )
             }
@@ -385,6 +422,8 @@ class FloatingPetService : Service() {
                     onDanmakuComplete = { danmakuId ->
                         // 移除完成的弹幕
                         activeDanmakuList.removeAll { it.id == danmakuId }
+                        // 检查是否需要移除弹幕窗口
+                        removeDanmakuWindowIfEmpty()
                     }
                 )
             }
@@ -413,17 +452,8 @@ class FloatingPetService : Service() {
             format = PixelFormat.TRANSPARENT
         }
         
-        // ⚠️ 暂时不添加弹幕窗口，等有弹幕时再添加
-        // 这样可以避免全屏窗口拦截触摸
-        android.util.Log.d("FloatingPetService", "弹幕窗口创建完成，等待弹幕时才添加到屏幕")
-        
-        // try {
-        //     windowManager.addView(danmakuFloatingView, danmakuLayoutParams)
-        //     android.util.Log.d("FloatingPetService", "弹幕窗口创建成功（全屏）")
-        // } catch (e: Exception) {
-        //     android.util.Log.e("FloatingPetService", "添加弹幕窗口到屏幕失败", e)
-        //     throw e
-        // }
+        // 不在启动时添加弹幕窗口，而是在需要显示弹幕时才添加
+        android.util.Log.d("FloatingPetService", "弹幕窗口创建完成，等待需要时才添加到屏幕")
     }
     
     /**
@@ -509,68 +539,82 @@ class FloatingPetService : Service() {
             format = PixelFormat.TRANSPARENT
         }
         
-        // ⚠️ 暂时不添加对话窗口，等有对话时再添加
-        android.util.Log.d("FloatingPetService", "对话窗口创建完成，等待对话时才添加到屏幕")
-        
-        // try {
-        //     windowManager.addView(speechFloatingView, speechLayoutParams)
-        //     android.util.Log.d("FloatingPetService", "对话窗口创建成功")
-        // } catch (e: Exception) {
-        //     android.util.Log.e("FloatingPetService", "添加对话窗口到屏幕失败", e)
-        //     throw e
-        // }
+        // 不在启动时添加对话窗口，而是在需要显示对话时才添加
+        android.util.Log.d("FloatingPetService", "对话窗口创建完成，等待需要时才添加到屏幕")
     }
     
     /**
-     * 创建快捷菜单窗口（全屏）
+     * 确保弹幕窗口已添加到屏幕（线程安全）
      */
-    private fun createQuickMenuWindow() {
-        quickMenuFloatingView = ComposeWindowHelper.createComposeFrameLayout(
-            context = this,
-            width = FrameLayout.LayoutParams.MATCH_PARENT,
-            height = FrameLayout.LayoutParams.MATCH_PARENT,
-            tag = "QuickMenu"
-        ) {
-            QuickMenuOverlay(
-                show = showQuickMenu.value,
-                onDismiss = { 
-                    showQuickMenu.value = false
-                    updateQuickMenuVisibility()
-                },
-                items = getQuickMenuItems()
-            )
+    private fun ensureDanmakuWindowAdded() {
+        synchronized(this) {
+            if (!isDanmakuWindowAdded && ::danmakuFloatingView.isInitialized) {
+                try {
+                    windowManager.addView(danmakuFloatingView, danmakuLayoutParams)
+                    isDanmakuWindowAdded = true
+                    android.util.Log.d("FloatingPetService", "✅ 弹幕窗口已添加到屏幕")
+                } catch (e: Exception) {
+                    android.util.Log.e("FloatingPetService", "❌ 添加弹幕窗口失败", e)
+                    isDanmakuWindowAdded = false  // 确保状态一致
+                }
+            }
         }
-        
-        quickMenuLayoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or  // 默认不可触摸
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
-            format = PixelFormat.TRANSPARENT
+    }
+    
+    /**
+     * 移除弹幕窗口（当没有活动弹幕时）（线程安全）
+     */
+    private fun removeDanmakuWindowIfEmpty() {
+        synchronized(this) {
+            if (isDanmakuWindowAdded && activeDanmakuList.isEmpty()) {
+                try {
+                    windowManager.removeView(danmakuFloatingView)
+                    isDanmakuWindowAdded = false
+                    android.util.Log.d("FloatingPetService", "✅ 弹幕窗口已移除（无活动弹幕）")
+                } catch (e: Exception) {
+                    android.util.Log.e("FloatingPetService", "❌ 移除弹幕窗口失败", e)
+                    // 即使移除失败，也标记为未添加，避免重复尝试
+                    isDanmakuWindowAdded = false
+                }
+            }
         }
-        
-        // ⚠️ 暂时不添加快捷菜单窗口，等需要显示时再添加
-        android.util.Log.d("FloatingPetService", "快捷菜单窗口创建完成，等待显示时才添加到屏幕")
-        
-        // try {
-        //     windowManager.addView(quickMenuFloatingView, quickMenuLayoutParams)
-        //     android.util.Log.d("FloatingPetService", "快捷菜单窗口创建成功")
-        // } catch (e: Exception) {
-        //     android.util.Log.e("FloatingPetService", "添加快捷菜单窗口到屏幕失败", e)
-        //     throw e
-        // }
+    }
+    
+    /**
+     * 确保对话窗口已添加到屏幕（线程安全）
+     */
+    private fun ensureSpeechWindowAdded() {
+        synchronized(this) {
+            if (!isSpeechWindowAdded && ::speechFloatingView.isInitialized) {
+                try {
+                    windowManager.addView(speechFloatingView, speechLayoutParams)
+                    isSpeechWindowAdded = true
+                    android.util.Log.d("FloatingPetService", "✅ 对话窗口已添加到屏幕")
+                } catch (e: Exception) {
+                    android.util.Log.e("FloatingPetService", "❌ 添加对话窗口失败", e)
+                    isSpeechWindowAdded = false  // 确保状态一致
+                }
+            }
+        }
+    }
+    
+    /**
+     * 移除对话窗口（当没有对话时）（线程安全）
+     */
+    private fun removeSpeechWindowIfEmpty() {
+        synchronized(this) {
+            if (isSpeechWindowAdded && currentSpeech.value == null) {
+                try {
+                    windowManager.removeView(speechFloatingView)
+                    isSpeechWindowAdded = false
+                    android.util.Log.d("FloatingPetService", "✅ 对话窗口已移除（无对话）")
+                } catch (e: Exception) {
+                    android.util.Log.e("FloatingPetService", "❌ 移除对话窗口失败", e)
+                    // 即使移除失败，也标记为未添加，避免重复尝试
+                    isSpeechWindowAdded = false
+                }
+            }
+        }
     }
     
     /**
@@ -799,7 +843,7 @@ class FloatingPetService : Service() {
     }
     
     /**
-     * 启动弹幕监听器（等待手动触发）
+     * 启动弹幕生成器（自动模式）
      */
     private fun startDanmakuListener() {
         // 检查用户设置
@@ -809,7 +853,7 @@ class FloatingPetService : Service() {
             return
         }
         
-        android.util.Log.d("FloatingPetService", "启动弹幕监听器（等待触发）")
+        android.util.Log.d("FloatingPetService", "弹幕生成器启动（手动触发模式）")
         
         stopDanmakuGenerator()
         
@@ -831,6 +875,9 @@ class FloatingPetService : Service() {
      */
     private fun burstDanmaku() {
         android.util.Log.d("FloatingPetService", "💬 弹幕爆发！一股脑涌现 ${Constants.Danmaku.BURST_COUNT} 条")
+        
+        // 确保弹幕窗口已添加到屏幕
+        ensureDanmakuWindowAdded()
         
         serviceScope.launch {
             // 获取屏幕尺寸（px转换为dp）
@@ -871,43 +918,6 @@ class FloatingPetService : Service() {
         triggerDanmakuBurst = true
     }
     
-    /**
-     * 更新快捷菜单窗口的触摸属性和可见性
-     */
-    private fun updateQuickMenuVisibility() {
-        try {
-            if (showQuickMenu.value) {
-                // 显示时允许触摸
-                quickMenuLayoutParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                android.util.Log.d("FloatingPetService", "📱 快捷菜单显示并可触摸，flags=${quickMenuLayoutParams.flags}")
-            } else {
-                // 隐藏时不响应触摸 - 这是关键！确保用户可以点击桌面其他内容
-                quickMenuLayoutParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                android.util.Log.d("FloatingPetService", "📱 快捷菜单隐藏且不可触摸，flags=${quickMenuLayoutParams.flags}")
-            }
-            // 强制更新窗口布局
-            windowManager.updateViewLayout(quickMenuFloatingView, quickMenuLayoutParams)
-            android.util.Log.d("FloatingPetService", "✅ 快捷菜单窗口布局已更新")
-        } catch (e: Exception) {
-            android.util.Log.e("FloatingPetService", "❌ 更新快捷菜单可见性失败", e)
-        }
-    }
-    
-    /**
-     * 获取快捷菜单项
-     */
-    private fun getQuickMenuItems(): List<QuickMenuItem> {
-        return listOf(
-            QuickMenuItem(
-                icon = "💬",
-                label = "让宠物说话",
-                action = { triggerSpeech(null) }
-            )
-        )
-    }
     
     /**
      * 启动对话监听器
@@ -929,10 +939,23 @@ class FloatingPetService : Service() {
                     continue
                 }
                 
-                // 智能自动说话：只在关键状态下触发
+                // 智能自动说话：优先处理紧急状态（低于20），然后处理一般低状态（低于30）
+                val pet = petManager.pet.value
+                
+                // ⭐ 紧急状态检查（低于20）- 更频繁提醒（30秒间隔）
+                val isUrgent = pet.hunger < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
+                              pet.thirst < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
+                              pet.sleep < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
+                              pet.happiness < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD
+                
+                if (isUrgent && SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = 30000L)) {
+                    // 紧急状态：30秒提醒一次
+                    showSpeech(null)
+                    continue
+                }
+                
+                // 一般低状态检查（低于30）- 正常频率（60秒间隔）
                 if (SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = 60000L)) {
-                    val pet = petManager.pet.value
-                    
                     // 只在以下状态下自动说话：
                     val shouldAutoSpeak = when {
                         pet.hunger < 30 -> true  // 饥饿
@@ -945,9 +968,19 @@ class FloatingPetService : Service() {
                     if (shouldAutoSpeak) {
                         val speech = SpeechGenerator.generateSpeech(pet)
                         if (speech != null) {
+                            ensureSpeechWindowAdded()  // 确保窗口已添加
                             currentSpeech.value = speech
                             lastSpeechTime = System.currentTimeMillis()
                             android.util.Log.d("FloatingPetService", "💬 宠物主动说话（状态不佳）: ${speech.text}")
+                            
+                            // 在对话持续时间后自动清空对话并检查是否需要移除窗口
+                            serviceScope.launch {
+                                delay(speech.duration)
+                                if (currentSpeech.value == speech) {
+                                    currentSpeech.value = null
+                                    removeSpeechWindowIfEmpty()
+                                }
+                            }
                         }
                     }
                 }
@@ -962,9 +995,19 @@ class FloatingPetService : Service() {
         val pet = petManager.pet.value
         val speech = SpeechGenerator.generateSpeech(pet, trigger)
         if (speech != null) {
+            ensureSpeechWindowAdded()  // 确保窗口已添加
             currentSpeech.value = speech
             lastSpeechTime = System.currentTimeMillis()
             android.util.Log.d("FloatingPetService", "💬 宠物说话: ${speech.text}")
+            
+            // 在对话持续时间后自动清空对话并检查是否需要移除窗口
+            serviceScope.launch {
+                delay(speech.duration)
+                if (currentSpeech.value == speech) {
+                    currentSpeech.value = null
+                    removeSpeechWindowIfEmpty()
+                }
+            }
         }
     }
     
@@ -996,45 +1039,65 @@ class FloatingPetService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         
-        // 停止移动和动画
-        stopAutoMovement()
-        stopHappyJumpAnimation()  // 停止开心跳跃动画
-        stopDanmakuGenerator()  // ⭐ 停止弹幕生成
-        stopSpeechMonitor()     // 停止对话监听
+        android.util.Log.d("FloatingPetService", "🔴 服务销毁，开始清理资源")
         
+        try {
+            // 1. 停止所有协程任务
+            stopAutoMovement()
+            stopHappyJumpAnimation()
+            stopDanmakuGenerator()
+            stopSpeechMonitor()
+            
+            // 2. 取消协程作用域（重要！防止内存泄漏）
+            serviceScope.cancel()
+            android.util.Log.d("FloatingPetService", "✅ 协程作用域已取消")
+            
+            // 3. 移除所有窗口
+            removeAllWindows()
+            
+            android.util.Log.d("FloatingPetService", "✅ 资源清理完成")
+        } catch (e: Exception) {
+            android.util.Log.e("FloatingPetService", "❌ 清理资源时出错", e)
+        }
+    }
+    
+    /**
+     * 移除所有窗口
+     */
+    private fun removeAllWindows() {
         // 移除宠物窗口
         if (::petFloatingView.isInitialized) {
             try {
                 windowManager.removeView(petFloatingView)
+                android.util.Log.d("FloatingPetService", "✅ 宠物窗口已移除")
             } catch (e: Exception) {
                 android.util.Log.w("FloatingPetService", "移除宠物窗口失败", e)
             }
         }
         
-        // 移除弹幕窗口
-        if (::danmakuFloatingView.isInitialized) {
-            try {
-                windowManager.removeView(danmakuFloatingView)
-            } catch (e: Exception) {
-                android.util.Log.w("FloatingPetService", "移除弹幕窗口失败", e)
+        // 移除弹幕窗口（只有在已添加时才移除）
+        synchronized(this) {
+            if (::danmakuFloatingView.isInitialized && isDanmakuWindowAdded) {
+                try {
+                    windowManager.removeView(danmakuFloatingView)
+                    isDanmakuWindowAdded = false
+                    android.util.Log.d("FloatingPetService", "✅ 弹幕窗口已移除")
+                } catch (e: Exception) {
+                    android.util.Log.w("FloatingPetService", "移除弹幕窗口失败", e)
+                }
             }
         }
         
-        // 移除对话窗口
-        if (::speechFloatingView.isInitialized) {
-            try {
-                windowManager.removeView(speechFloatingView)
-            } catch (e: Exception) {
-                android.util.Log.w("FloatingPetService", "移除对话窗口失败", e)
-            }
-        }
-        
-        // 移除快捷菜单窗口
-        if (::quickMenuFloatingView.isInitialized) {
-            try {
-                windowManager.removeView(quickMenuFloatingView)
-            } catch (e: Exception) {
-                android.util.Log.w("FloatingPetService", "移除快捷菜单窗口失败", e)
+        // 移除对话窗口（只有在已添加时才移除）
+        synchronized(this) {
+            if (::speechFloatingView.isInitialized && isSpeechWindowAdded) {
+                try {
+                    windowManager.removeView(speechFloatingView)
+                    isSpeechWindowAdded = false
+                    android.util.Log.d("FloatingPetService", "✅ 对话窗口已移除")
+                } catch (e: Exception) {
+                    android.util.Log.w("FloatingPetService", "移除对话窗口失败", e)
+                }
             }
         }
     }

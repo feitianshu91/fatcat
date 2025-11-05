@@ -1,0 +1,289 @@
+package com.example.fatcat.utils
+
+import com.example.fatcat.model.Pet
+import com.example.fatcat.model.PetSpeech
+import com.example.fatcat.model.PetState
+import com.example.fatcat.model.SpeechTrigger
+import kotlin.random.Random
+
+/**
+ * 宠物说话生成器
+ * 根据宠物状态和触发原因生成对应的话语
+ */
+object SpeechGenerator {
+    
+    // 饥饿相关话语（低于30）
+    private val hungryPhrases = listOf(
+        "主人，我好饿啊~ 🍖",
+        "肚子咕咕叫了...",
+        "好想吃东西呀！",
+        "能给我点吃的吗？",
+        "饿得没力气了...",
+        "主人，喂我吃的吧~",
+        "我需要补充能量啦！",
+        "食物！我要食物！🍔"
+    )
+    
+    // 非常饥饿相关话语（低于20）⭐ 紧急提醒
+    private val veryHungryPhrases = listOf(
+        "主人，我饿了，想吃好吃的 🍖",
+        "主人！我快饿晕了，救救我！",
+        "好饿好饿！求求主人喂我吧！😭",
+        "饥饿值告急！主人快来！",
+        "再不吃东西就要饿死了... 🥺",
+        "主人，我真的很饿很饿了！",
+        "肚子空空的，主人快给我吃的！"
+    )
+    
+    // 口渴相关话语（低于30）
+    private val thirstyPhrases = listOf(
+        "好渴啊，想喝水~ 💧",
+        "口好干...",
+        "主人，给我水喝吧！",
+        "需要补充水分了...",
+        "渴得不行了！",
+        "想喝水水~",
+        "水！我要水！💦"
+    )
+    
+    // 非常口渴相关话语（低于20）⭐ 紧急提醒
+    private val veryThirstyPhrases = listOf(
+        "主人，我渴了，想喝水水 💧",
+        "主人！快渴死了，给我水喝！",
+        "好渴好渴！求求主人了！😭",
+        "口渴值告急！主人快来！",
+        "嗓子都要冒烟了... 🥺",
+        "主人，我真的很渴很渴了！",
+        "渴得受不了了，快给我水！"
+    )
+    
+    // 疲劳相关话语（低于30）
+    private val tiredPhrases = listOf(
+        "好困啊...想睡觉~ 😴",
+        "眼皮打架了...",
+        "需要休息一下...",
+        "好累呀，要睡觉了~",
+        "让我睡一会儿吧...",
+        "困死了...💤",
+        "精神不太好..."
+    )
+    
+    // 非常疲劳相关话语（低于20）⭐ 紧急提醒
+    private val veryTiredPhrases = listOf(
+        "主人，我累了，想休息一下 😴",
+        "主人！我快累趴了，让我睡觉吧！",
+        "好累好累！撑不住了！😭",
+        "精力值告急！主人快来！",
+        "精疲力尽了... 🥺",
+        "主人，我真的很累很累了！",
+        "一点力气都没有了，让我睡觉吧！"
+    )
+    
+    // 不开心相关话语（低于30）
+    private val unhappyPhrases = listOf(
+        "心情不太好... 😢",
+        "感觉有点难过...",
+        "主人，陪陪我吧~",
+        "不开心了...",
+        "需要主人的关爱！",
+        "有点孤单...",
+        "呜呜呜...😭"
+    )
+    
+    // 非常不开心相关话语（低于20）⭐ 紧急提醒
+    private val veryUnhappyPhrases = listOf(
+        "主人，我不开心，陪陪我嘛 😢",
+        "主人！我好难过，快来哄哄我！",
+        "好孤单好孤单！主人在哪里！😭",
+        "快乐值告急！主人快来！",
+        "心情糟透了... 🥺",
+        "主人，我真的很不开心了！",
+        "好想主人陪我，不要离开我！"
+    )
+    
+    // 开心相关话语
+    private val happyPhrases = listOf(
+        "好开心呀！ 😊",
+        "心情棒棒哒！",
+        "今天真是美好的一天~",
+        "和主人在一起真好！💕",
+        "超级开心！✨",
+        "感觉世界都亮了！",
+        "耶！好幸福~",
+        "主人最好了！❤️"
+    )
+    
+    // 喂食后话语
+    private val feedPhrases = listOf(
+        "谢谢主人！好好吃~ 😋",
+        "嗯嗯，真香！",
+        "太美味了！",
+        "主人最好了！",
+        "吃饱啦，满足~",
+        "谢谢喂食！💕",
+        "好吃得飞起！"
+    )
+    
+    // 喝水后话语
+    private val waterPhrases = listOf(
+        "咕噜咕噜~解渴了！💧",
+        "谢谢主人的水~",
+        "好舒服呀！",
+        "润润喉咙~",
+        "水水真好喝！",
+        "补充完毕！✨"
+    )
+    
+    // 摸头后话语
+    private val patPhrases = listOf(
+        "舒服~继续摸~ 😌",
+        "好喜欢被摸头！",
+        "嘿嘿，痒痒的~",
+        "主人的手好温暖！",
+        "真舒服呀！💕",
+        "再摸一会儿嘛~",
+        "摸头杀！✨"
+    )
+    
+    // 拥抱后话语
+    private val hugPhrases = listOf(
+        "好温暖！喜欢抱抱~ 🤗",
+        "主人的怀抱真舒服！",
+        "抱紧紧！💕",
+        "好幸福呀~",
+        "这就是爱的感觉吗？",
+        "想一直这样！",
+        "抱抱最棒了！❤️"
+    )
+    
+    // 睡觉时话语
+    private val sleepPhrases = listOf(
+        "晚安，主人~ 😴",
+        "我去睡觉啦...",
+        "睡个美美的觉~",
+        "做个好梦！💤",
+        "困了，先睡了...",
+        "呼呼~",
+        "Zzz..."
+    )
+    
+    // 醒来时话语
+    private val wakeUpPhrases = listOf(
+        "早安！睡得真好~ ☀️",
+        "呼~醒啦！",
+        "精神满满！",
+        "新的一天开始了！",
+        "睡饱啦，元气满满！✨",
+        "主人，早上好！",
+        "好梦醒来~"
+    )
+    
+    // 随机闲聊
+    private val randomPhrases = listOf(
+        "主人在干嘛呀？",
+        "今天天气真好~",
+        "无聊了，陪我玩嘛~",
+        "主人，看这里！👋",
+        "我在这里哦~",
+        "嘿嘿~ 😊",
+        "想主人了~",
+        "爱你哦！💕",
+        "一起玩吧！",
+        "我是可爱的肥波波~",
+        "主人最重要了！",
+        "要一直在一起哦~"
+    )
+    
+    // 游戏胜利话语
+    private val gameWinPhrases = listOf(
+        "耶！我赢啦！ 🎉",
+        "哈哈，我太厉害了！",
+        "主人，我好棒吧~",
+        "胜利的感觉真好！",
+        "我是冠军！✨",
+        "厉不厉害？嘿嘿~"
+    )
+    
+    // 游戏失败话语
+    private val gameLosePhrases = listOf(
+        "呜呜，输了... 😢",
+        "下次我会赢的！",
+        "主人太厉害了...",
+        "让我再试一次！",
+        "不服气！再来！",
+        "这次算你赢..."
+    )
+    
+    // 升级话语
+    private val levelUpPhrases = listOf(
+        "耶！升级啦！ ⭐",
+        "我变强了！",
+        "感觉力量涌上来了！",
+        "主人，我升级了！",
+        "变得更厉害了！✨",
+        "等级提升！好开心~"
+    )
+    
+    /**
+     * 根据宠物状态生成话语
+     */
+    fun generateSpeech(pet: Pet, trigger: SpeechTrigger? = null): PetSpeech? {
+        val text = when {
+            // 如果有明确的触发原因
+            trigger != null -> getSpeechByTrigger(trigger)
+            
+            // ⭐ 优先检查紧急状态（低于20）- 宠物会主动紧急提醒
+            pet.hunger < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryHungryPhrases.random()
+            pet.thirst < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryThirstyPhrases.random()
+            pet.sleep < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryTiredPhrases.random()
+            pet.happiness < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryUnhappyPhrases.random()
+            
+            // 然后检查一般低状态（低于30）
+            pet.hunger < 30 -> hungryPhrases.random()
+            pet.thirst < 30 -> thirstyPhrases.random()
+            pet.sleep < 30 -> tiredPhrases.random()
+            pet.happiness < 30 -> unhappyPhrases.random()
+            pet.state == PetState.HAPPY -> happyPhrases.random()
+            pet.state == PetState.SLEEP -> sleepPhrases.random()
+            pet.state == PetState.SAD -> unhappyPhrases.random()
+            
+            // 随机闲聊（概率触发）
+            Random.nextFloat() < 0.3f -> randomPhrases.random()
+            
+            else -> null
+        } ?: return null
+        
+        return PetSpeech(text = text)
+    }
+    
+    /**
+     * 根据触发原因获取话语
+     */
+    private fun getSpeechByTrigger(trigger: SpeechTrigger): String {
+        return when (trigger) {
+            SpeechTrigger.HUNGRY -> hungryPhrases.random()
+            SpeechTrigger.THIRSTY -> thirstyPhrases.random()
+            SpeechTrigger.TIRED -> tiredPhrases.random()
+            SpeechTrigger.UNHAPPY -> unhappyPhrases.random()
+            SpeechTrigger.HAPPY -> happyPhrases.random()
+            SpeechTrigger.FEED -> feedPhrases.random()
+            SpeechTrigger.WATER -> waterPhrases.random()
+            SpeechTrigger.PAT -> patPhrases.random()
+            SpeechTrigger.HUG -> hugPhrases.random()
+            SpeechTrigger.SLEEP -> sleepPhrases.random()
+            SpeechTrigger.WAKE_UP -> wakeUpPhrases.random()
+            SpeechTrigger.RANDOM -> randomPhrases.random()
+            SpeechTrigger.GAME_WIN -> gameWinPhrases.random()
+            SpeechTrigger.GAME_LOSE -> gameLosePhrases.random()
+            SpeechTrigger.LEVEL_UP -> levelUpPhrases.random()
+        }
+    }
+    
+    /**
+     * 检查是否应该说话（避免说话太频繁）
+     */
+    fun shouldSpeak(lastSpeechTime: Long, minInterval: Long = 10000L): Boolean {
+        return System.currentTimeMillis() - lastSpeechTime >= minInterval
+    }
+}
+
