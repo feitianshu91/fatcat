@@ -84,8 +84,21 @@ class UpdateManager(private val context: Context) {
                 packageInfo.versionCode
             }
             
-            // 从服务器获取最新版本信息
-            val versionJson = URL(VERSION_CHECK_URL).readText()
+            android.util.Log.d("UpdateManager", "📱 当前版本: versionCode=$currentVersionCode, versionName=${packageInfo.versionName}")
+            android.util.Log.d("UpdateManager", "🌐 检查更新URL: $VERSION_CHECK_URL")
+            
+            // 从服务器获取最新版本信息（添加缓存控制，避免获取到缓存的旧版本）
+            val url = URL(VERSION_CHECK_URL)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+            connection.setRequestProperty("Pragma", "no-cache")
+            connection.setRequestProperty("Expires", "0")
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+            
+            val versionJson = connection.inputStream.bufferedReader().use { it.readText() }
+            android.util.Log.d("UpdateManager", "📥 获取到的version.json: $versionJson")
+            
             val jsonObject = JSONObject(versionJson)
             
             val latestVersion = AppVersion(
@@ -97,14 +110,19 @@ class UpdateManager(private val context: Context) {
                 fileSize = jsonObject.optLong("fileSize", 0L)
             )
             
+            android.util.Log.d("UpdateManager", "🔍 远程版本: versionCode=${latestVersion.versionCode}, versionName=${latestVersion.versionName}")
+            android.util.Log.d("UpdateManager", "📊 版本比较: 远程(${latestVersion.versionCode}) > 当前($currentVersionCode) = ${latestVersion.versionCode > currentVersionCode}")
+            
             // 如果有新版本，返回版本信息
             if (latestVersion.versionCode > currentVersionCode) {
+                android.util.Log.d("UpdateManager", "✅ 发现新版本！")
                 latestVersion
             } else {
+                android.util.Log.d("UpdateManager", "✅ 已是最新版本")
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.e("UpdateManager", "检查更新失败", e)
+            android.util.Log.e("UpdateManager", "❌ 检查更新失败", e)
             null
         }
     }
