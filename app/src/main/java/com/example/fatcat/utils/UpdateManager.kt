@@ -201,9 +201,17 @@ class UpdateManager(private val context: Context) {
             }
         }
         
+        // Android 13+ 需要明确指定RECEIVER标志
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Context.RECEIVER_NOT_EXPORTED
+        } else {
+            0
+        }
+        
         context.registerReceiver(
             receiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            flags
         )
     }
     
