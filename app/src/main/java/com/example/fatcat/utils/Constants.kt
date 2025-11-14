@@ -15,10 +15,12 @@ object Constants {
         const val KEY_PET_PERSONALITY = "pet_personality"
         const val KEY_PET_HOBBY = "pet_hobby"
         const val KEY_PET_STATE = "pet_state"
-        const val KEY_PET_HUNGER = "pet_hunger"
-        const val KEY_PET_THIRST = "pet_thirst"
-        const val KEY_PET_SLEEP = "pet_sleep"
-        const val KEY_PET_HAPPINESS = "pet_happiness"
+        const val KEY_PET_HEALTH = "pet_health"        // 健康值（精力值）
+        const val KEY_PET_SATIETY = "pet_satiety"      // 饱腹值（v4.1新增）
+        const val KEY_PET_THIRST = "pet_thirst"        // 口渴值（v4.1新增）
+        const val KEY_PET_HAPPINESS = "pet_happiness"   // 开心值（v4.1新增）
+        const val KEY_PET_SLEEP = "pet_sleep"          // 睡眠值（v4.1新增）
+        const val KEY_FORCED_SLEEP_START = "forced_sleep_start" // 强制睡眠开始时间
         const val KEY_DANMAKU_ENABLED = "danmaku_enabled"  // 弹幕开关状态
     }
     
@@ -32,71 +34,62 @@ object Constants {
         const val MAX_HEALTH_VALUE = 100
     }
     
-    // ==================== 健康值阈值 ====================
-    object HealthThresholds {
-        const val SLEEP_THRESHOLD_LOW = 30      // 低于此值会睡觉
-        const val SLEEP_THRESHOLD_CRITICAL = 20 // 低于此值强制睡觉
-        const val SLEEP_THRESHOLD_RECOVER = 50  // 高于此值可以恢复活动
-        const val MOVE_THRESHOLD = 20           // 精力值大于此值可以移动（新增）
-        const val HAPPINESS_THRESHOLD_LOW = 30  // 低于此值会悲伤
-        const val HAPPINESS_THRESHOLD_HIGH = 80 // 高于此值会开心
-        
-        // 低状态提醒阈值（宠物会主动提醒主人）⭐
-        const val LOW_STATUS_ALERT_THRESHOLD = 20  // 低于此值会主动提醒主人照顾
+    // ==================== 睡眠相关配置 ====================
+    object Sleep {
+        const val FORCED_SLEEP_MIN_DURATION_MS = 30 * 60 * 1000L // 强制睡眠至少持续30分钟
     }
     
-    // ==================== 更新间隔和衰减值 ====================
+    // ==================== 健康值阈值（v4.0简化版）===================
+    object HealthThresholds {
+        const val SLEEP_THRESHOLD = 20      // 低于此值强制睡觉
+        const val RECOVER_THRESHOLD = 50    // 高于此值可以恢复活动
+        const val MOVE_THRESHOLD = 20       // 健康值大于此值可以移动
+        const val TIRED_THRESHOLD = 50      // 低于此值进入疲惫状态
+    }
+    
+    // ==================== 更新间隔和衰减值（v4.1更新）===================
     object UpdateConfig {
         const val UPDATE_INTERVAL_MS = 5000L    // 更新间隔（毫秒）= 5秒
         
-        // ========== 基础衰减速率（最优配置：8小时安全线）==========
-        // 设计理念："8小时安全线" - 上班/上学/睡觉8小时不会造成严重问题
-        // 参考业界最佳实践：桌面宠物应该是轻度养成，4-6小时照顾一次
-        // 移动时精力值下降最快（4小时），饥饿和口渴第二（5.6小时），快乐第三（7.7小时）
+        // ========== v4.1 状态值系统 ==========
+        // 设计理念：健康值（精力）+ 饱腹值 + 口渴值 + 开心值
         
-        // 移动时的衰减速率（活动状态）- 符合现实的差异化设计 ⭐
-        const val SLEEP_DECAY_RATE_MOVING = 0.035f      // 精力值衰减（移动时）- 第一快，4小时降完
-        const val THIRST_DECAY_RATE_MOVING = 0.030f     // 口渴值衰减（移动时）- 第二快，4.6小时降完 ⭐ 运动失水快
-        const val HUNGER_DECAY_RATE_MOVING = 0.020f     // 饥饿值衰减（移动时）- 第三快，6.9小时降完 ⭐ 运动对饥饿影响小
-        const val HAPPINESS_DECAY_RATE_MOVING = 0.018f  // 快乐值衰减（移动时）- 最慢，7.7小时降完
+        // 健康值（精力值）衰减速率
+        const val HEALTH_DECAY_RATE = 1        // 健康值衰减速率（每5秒-1点）
+        const val HEALTH_RECOVERY_RATE = 1     // 健康值恢复速率（睡觉时每5秒+1点）
         
-        // 预计衰减时间（假设一直移动）：
-        // 精力值：100 ÷ 0.035 × 5秒 = 14286秒 ≈ 238分钟 ≈ 4.0小时 ⚡ 运动消耗最快
-        // 口渴值：100 ÷ 0.030 × 5秒 = 16667秒 ≈ 278分钟 ≈ 4.6小时 💧 运动散热失水
-        // 饥饿值：100 ÷ 0.020 × 5秒 = 25000秒 ≈ 417分钟 ≈ 6.9小时 🍖 猫是短跑动物，运动不显著增加饥饿
-        // 快乐值：100 ÷ 0.018 × 5秒 = 27778秒 ≈ 463分钟 ≈ 7.7小时 😊 情绪状态
-        // 平均：(238 + 278 + 417 + 463) ÷ 4 = 349分钟 ≈ 5.8小时 ✓
+        // 饱腹值衰减速率（100→0需要2小时）
+        // 2小时 = 120分钟 = 7200秒 = 1440次更新 → 每次减 100/1440 = 0.0694
+        const val SATIETY_DECAY_RATE = 0.0694f  // 饱腹值衰减速率（每5秒-0.0694点）
         
-        // 静止时的衰减速率（为移动速率的约30%，确保长时间挂机也能坚持）
-        const val SLEEP_DECAY_RATE_IDLE = 0.011f        // 精力值衰减（静止时）- 12.6小时降完
-        const val THIRST_DECAY_RATE_IDLE = 0.010f       // 口渴值衰减（静止时）- 13.9小时降完 ⭐ 呼吸失水
-        const val HUNGER_DECAY_RATE_IDLE = 0.008f       // 饥饿值衰减（静止时）- 17.4小时降完 ⭐ 基础代谢
-        const val HAPPINESS_DECAY_RATE_IDLE = 0.005f    // 快乐值衰减（静止时）- 27.8小时降完
+        // 口渴值衰减速率（100→0需要1.5小时）
+        // 1.5小时 = 90分钟 = 5400秒 = 1080次更新 → 每次减 100/1080 = 0.0926
+        const val THIRST_DECAY_RATE = 0.0926f   // 口渴值衰减速率（每5秒-0.0926点）
         
-        // 预计静止时衰减时间：
-        // 精力值：100 ÷ 0.011 × 5秒 = 45455秒 ≈ 758分钟 ≈ 12.6小时
-        // 口渴值：100 ÷ 0.010 × 5秒 = 50000秒 ≈ 833分钟 ≈ 13.9小时 💧 呼吸持续失水
-        // 饥饿值：100 ÷ 0.008 × 5秒 = 62500秒 ≈ 1042分钟 ≈ 17.4小时 🍖 基础代谢消耗
-        // 快乐值：100 ÷ 0.005 × 5秒 = 100000秒 ≈ 1667分钟 ≈ 27.8小时 😊 长时间无互动
-        // ✅ 8小时上班/睡觉后，精力值剩余约37%，其他状态更健康
+        // 开心值衰减速率（100→0需要1小时）
+        // 1小时 = 60分钟 = 3600秒 = 720次更新 → 每次减 100/720 = 0.1389
+        const val HAPPINESS_DECAY_RATE = 0.1389f // 开心值衰减速率（每5秒-0.1389点）
         
-        // 睡眠时的速率 ⭐ 关键优化：睡眠时口渴和饥饿也会缓慢下降，符合现实
-        const val SLEEP_RECOVERY_RATE = 1.0f            // 精力恢复速率（每5秒+1点）
-        const val THIRST_DECAY_RATE_SLEEP = 0.005f      // 口渴值衰减（睡眠时）⭐ 呼吸失水
-        const val HUNGER_DECAY_RATE_SLEEP = 0.004f      // 饥饿值衰减（睡眠时）⭐ 基础代谢
+        // 睡眠值衰减速率（100→0需要4小时）
+        // 4小时 = 240分钟 = 14400秒 = 2880次更新 → 每次减 100/2880 = 0.0347
+        const val SLEEP_DECAY_RATE = 0.0347f     // 睡眠值衰减速率（每5秒-0.0347点）
         
-        // 睡眠8小时后的状态变化：
-        // 精力值：恢复到100% ✅
-        // 口渴值：100 - (0.005 × 576次) = 71.2% ✅ 睡醒后会口渴
-        // 饥饿值：100 - (0.004 × 576次) = 77.0% ✅ 睡醒后会饿
-        // 快乐值：不变 ✅ 睡眠不影响情绪
+        // 睡眠值恢复速率（目标：1小时回满）
+        // 1小时 = 60分钟 = 3600秒 = 720次更新 → 每次加 100/720 = 0.1389
+        const val SLEEP_RECOVERY_RATE = 0.1389f  // 睡眠中恢复速率（每5秒+0.1389点，约1小时回满）
+        
+        // 实际耗尽时间验证：
+        // 饱腹值：100 ÷ 0.0694 × 5秒 = 7205秒 ≈ 120.1分钟 ≈ 2小时 ✅
+        // 口渴值：100 ÷ 0.0926 × 5秒 = 5399秒 ≈ 90.0分钟 = 1.5小时 ✅
+        // 开心值：100 ÷ 0.1389 × 5秒 = 3600秒 = 60分钟 = 1小时 ✅
+        // 睡眠值：100 ÷ 0.0347 × 5秒 = 14409秒 ≈ 240.2分钟 ≈ 4小时 ✅
     }
     
-    // ==================== 互动奖励值 ====================
+    // ==================== 互动奖励值（v4.1更新）===================
     object InteractionRewards {
-        const val PAT_HEAD_HAPPINESS = 10       // 摸头增加的快乐值
-        const val HUG_HAPPINESS = 15           // 拥抱增加的快乐值
-        const val FEED_HUNGER = 20             // 喂食增加的饥饿值
+        const val PAT_HEAD_HAPPINESS = 10      // 摸头增加的开心值
+        const val HUG_HAPPINESS = 15          // 拥抱增加的开心值
+        const val FEED_SATIETY = 20            // 喂食增加的饱腹值
         const val FEED_WATER_THIRST = 20       // 喂水增加的口渴值
     }
     
@@ -137,6 +130,13 @@ object Constants {
         const val NOTIFICATION_ID = 1
         const val TITLE = "肥波波正在运行"
         const val CONTENT = "桌面宠物正在显示"
+        
+        // 状态提醒通知配置
+        const val CHANNEL_ID_STATUS_ALERT = "pet_status_alert_channel"
+        const val CHANNEL_NAME_STATUS_ALERT = "宠物状态提醒"
+        const val NOTIFICATION_ID_STATUS_ALERT = 2
+        const val STATUS_ALERT_THRESHOLD = 20  // 状态值低于此值时提醒
+        const val NOTIFICATION_INTERVAL_MS = 5 * 60 * 1000L  // 通知间隔：5分钟
     }
     
     // ==================== 弹幕配置 ====================
@@ -145,6 +145,36 @@ object Constants {
         const val AUTO_GENERATE = false             // 是否自动生成（false=手动点击按钮触发）
         const val BURST_COUNT = 35                  // 每次涌现的弹幕数量 ✨
         const val BURST_DELAY_MS = 100L             // 每条弹幕之间的延迟（毫秒）
+        const val CHECK_INTERVAL_MS = 100L          // 弹幕检查间隔（毫秒）
+    }
+    
+    // ==================== 宠物说话配置 ====================
+    object Speech {
+        const val MONITOR_INTERVAL_MS = 5000L       // 说话监控间隔（毫秒）
+        const val URGENT_INTERVAL_MS = 30000L       // 紧急状态提醒间隔（30秒）
+        const val NORMAL_INTERVAL_MS = 60000L       // 一般状态提醒间隔（60秒）
+        const val LOW_HEALTH_THRESHOLD = 30         // 低健康值阈值
+    }
+    
+    // ==================== 动画配置 ====================
+    object Animation {
+        const val JUMP_HEIGHT = 40                  // 跳跃高度（像素）
+        const val JUMP_COUNT = 3                    // 跳跃次数
+        const val JUMP_DURATION_MS = 150L           // 每次跳跃的上升/下降时间（毫秒）
+        const val JUMP_PAUSE_MS = 50L               // 跳跃之间的停顿（毫秒）
+        const val JUMP_STEPS = 8                    // 跳跃动画步数
+    }
+    
+    // ==================== 更新配置 ====================
+    object Update {
+        const val CONNECT_TIMEOUT_MS = 10000        // 连接超时（毫秒）
+        const val READ_TIMEOUT_MS = 10000           // 读取超时（毫秒）
+        const val DOWNLOAD_PROGRESS_INTERVAL_MS = 500L  // 下载进度更新间隔（毫秒）
+    }
+    
+    // ==================== 移动配置扩展 ====================
+    object MovementExtended {
+        const val CENTER_TARGET_RANGE = 200         // 中心目标范围（像素）
     }
     
     // ==================== 等级系统配置 ====================

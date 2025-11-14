@@ -101,6 +101,10 @@ class FloatingPetService : Service() {
     @Suppress("AutoboxingStateCreation")
     private val petPositionY = mutableStateOf(0)
     
+    // 状态提醒相关
+    private var lastNotificationTime = 0L  // 上次发送通知的时间
+    private val NOTIFICATION_INTERVAL_MS = Constants.Notification.NOTIFICATION_INTERVAL_MS
+    
     override fun onCreate() {
         super.onCreate()
         
@@ -629,21 +633,27 @@ class FloatingPetService : Service() {
             while (true) {
                 delay(Constants.Movement.MOVE_INTERVAL_MS)
                 
-                // 如果正在拖动，跳过
-                if (isDragging) {
-                    android.util.Log.d("FloatingPetService", "正在拖动，跳过移动")
+                // 如果正在拖动或正在播放动画，跳过移动
+                if (isDragging || isPlayingAnimation) {
+                    if (isDragging) {
+                        android.util.Log.d("FloatingPetService", "正在拖动，跳过移动")
+                    }
+                    if (isPlayingAnimation) {
+                        android.util.Log.d("FloatingPetService", "正在播放动画，跳过移动")
+                    }
+                    isCurrentlyMoving = false
                     continue
                 }
                 
                 // 检查宠物是否可以移动（只有常态时才移动）
                 val canMove = petManager.canMove()
                 val pet = petManager.pet.value
-                android.util.Log.d("FloatingPetService", "检查移动条件 - 状态:${pet.state}, 睡眠:${pet.sleep}, 可移动:$canMove")
+                android.util.Log.d("FloatingPetService", "检查移动条件 - 状态:${pet.state}, 健康值:${pet.health}, 可移动:$canMove")
                 
                 if (!canMove) {
                     // 不能移动时，清除目标位置
                     targetPosition = null
-                    isCurrentlyMoving = false  // 不能移动时设置为静止状态
+                    isCurrentlyMoving = false
                     continue
                 }
                 
@@ -721,18 +731,18 @@ class FloatingPetService : Service() {
                 // 保存原始位置
                 val originalY = petLayoutParams.y
                 
-                // 跳跃参数
-                val jumpHeight = 40  // 跳跃高度（像素）
-                val jumpCount = 3    // 跳跃次数
-                val jumpDuration = 150L  // 每次跳跃的上升/下降时间（毫秒）
-                val jumpPause = 50L      // 跳跃之间的停顿
+                // 跳跃参数（使用常量）
+                val jumpHeight = Constants.Animation.JUMP_HEIGHT
+                val jumpCount = Constants.Animation.JUMP_COUNT
+                val jumpDuration = Constants.Animation.JUMP_DURATION_MS
+                val jumpPause = Constants.Animation.JUMP_PAUSE_MS
                 
                 // 执行跳跃动画
                 repeat(jumpCount) { index ->
                     android.util.Log.d("FloatingPetService", "跳跃 ${index + 1}/$jumpCount")
                     
                     // 向上跳（使用缓动效果）
-                    val upSteps = 8
+                    val upSteps = Constants.Animation.JUMP_STEPS
                     repeat(upSteps) { step ->
                         if (!isPlayingAnimation) return@launch  // 如果被取消，提前退出
                         
@@ -749,7 +759,7 @@ class FloatingPetService : Service() {
                     }
                     
                     // 向下落（使用缓动效果）
-                    val downSteps = 8
+                    val downSteps = Constants.Animation.JUMP_STEPS
                     repeat(downSteps) { step ->
                         if (!isPlayingAnimation) return@launch  // 如果被取消，提前退出
                         
@@ -838,8 +848,110 @@ class FloatingPetService : Service() {
                 
                 // 应用健康值衰减（移动时衰减更快）
                 petManager.applyHealthDecay(isMoving = isCurrentlyMoving)
+                
+                // 检查状态值并发送提醒通知（后台运行时也会提醒）
+                checkStatusAndNotify()
             }
         }
+    }
+    
+    /**
+     * 检查状态值并发送提醒通知
+     * 当任何状态值低于20时，发送通知提醒主人
+     * 为避免频繁通知，设置了5分钟的通知间隔
+     */
+    private fun checkStatusAndNotify() {
+        val pet = petManager.pet.value
+        val lowStatuses = mutableListOf<String>()
+        
+        // 检查各个状态值
+        if (pet.satiety < Constants.Notification.STATUS_ALERT_THRESHOLD) {
+            lowStatuses.add("饱腹值: ${pet.satiety}%")
+        }
+        if (pet.thirst < Constants.Notification.STATUS_ALERT_THRESHOLD) {
+            lowStatuses.add("口渴值: ${pet.thirst}%")
+        }
+        if (pet.happiness < Constants.Notification.STATUS_ALERT_THRESHOLD) {
+            lowStatuses.add("开心值: ${pet.happiness}%")
+        }
+        if (pet.sleep < Constants.Notification.STATUS_ALERT_THRESHOLD) {
+            lowStatuses.add("睡眠值: ${pet.sleep}%")
+        }
+        
+        // 如果有低状态值，且距离上次通知已超过5分钟，则发送通知
+        if (lowStatuses.isNotEmpty()) {
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastNotificationTime >= NOTIFICATION_INTERVAL_MS) {
+                showStatusAlertNotification(lowStatuses)
+                lastNotificationTime = currentTime
+            }
+        }
+    }
+    
+    /**
+     * 显示状态提醒通知
+     */
+    private fun showStatusAlertNotification(lowStatuses: List<String>) {
+        // 创建状态提醒通知渠道
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                Constants.Notification.CHANNEL_ID_STATUS_ALERT,
+                Constants.Notification.CHANNEL_NAME_STATUS_ALERT,
+                android.app.NotificationManager.IMPORTANCE_HIGH  // 高优先级提醒
+            ).apply {
+                description = "当宠物状态值过低时提醒"
+                enableVibration(true)
+                enableLights(true)
+            }
+            val notificationManager = getSystemService(android.app.NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
+        
+        // 构建通知内容
+        val statusText = lowStatuses.joinToString("\n")
+        val notificationTitle = "⚠️ 肥波波需要照顾！"
+        val notificationContent = "以下状态值过低：\n$statusText"
+        
+        // 创建点击通知的Intent（打开应用）
+        val intent = android.content.Intent(this, com.example.fatcat.MainActivity::class.java).apply {
+            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        // 创建通知
+        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.Notification.Builder(this, Constants.Notification.CHANNEL_ID_STATUS_ALERT)
+                .setContentTitle(notificationTitle)
+                .setContentText(notificationContent)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(android.app.Notification.PRIORITY_HIGH)
+                .setDefaults(android.app.Notification.DEFAULT_ALL)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            android.app.Notification.Builder(this)
+                .setContentTitle(notificationTitle)
+                .setContentText(notificationContent)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(android.app.Notification.PRIORITY_HIGH)
+                .setDefaults(android.app.Notification.DEFAULT_ALL)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+        }
+        
+        // 显示通知
+        val notificationManager = getSystemService(android.app.NotificationManager::class.java)
+        notificationManager.notify(Constants.Notification.NOTIFICATION_ID_STATUS_ALERT, notification)
+        
+        android.util.Log.d("FloatingPetService", "📢 发送状态提醒通知: $statusText")
     }
     
     /**
@@ -859,7 +971,7 @@ class FloatingPetService : Service() {
         
         danmakuJob = serviceScope.launch {
             while (true) {
-                delay(100) // 每100ms检查一次
+                delay(Constants.Danmaku.CHECK_INTERVAL_MS)
                 
                 // 检查是否需要触发弹幕爆发
                 if (triggerDanmakuBurst) {
@@ -929,7 +1041,7 @@ class FloatingPetService : Service() {
         
         speechJob = serviceScope.launch {
             while (true) {
-                delay(5000) // 每5秒检查一次
+                delay(Constants.Speech.MONITOR_INTERVAL_MS)
                 
                 // 检查手动触发的说话
                 if (triggerSpeechAction != null) {
@@ -942,28 +1054,19 @@ class FloatingPetService : Service() {
                 // 智能自动说话：优先处理紧急状态（低于20），然后处理一般低状态（低于30）
                 val pet = petManager.pet.value
                 
-                // ⭐ 紧急状态检查（低于20）- 更频繁提醒（30秒间隔）
-                val isUrgent = pet.hunger < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
-                              pet.thirst < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
-                              pet.sleep < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD ||
-                              pet.happiness < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD
+                // ⭐ 紧急状态检查（低于20）- 更频繁提醒
+                val isUrgent = pet.health < Constants.HealthThresholds.SLEEP_THRESHOLD
                 
-                if (isUrgent && SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = 30000L)) {
+                if (isUrgent && SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = Constants.Speech.URGENT_INTERVAL_MS)) {
                     // 紧急状态：30秒提醒一次
                     showSpeech(null)
                     continue
                 }
                 
-                // 一般低状态检查（低于30）- 正常频率（60秒间隔）
-                if (SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = 60000L)) {
-                    // 只在以下状态下自动说话：
-                    val shouldAutoSpeak = when {
-                        pet.hunger < 30 -> true  // 饥饿
-                        pet.thirst < 30 -> true  // 口渴
-                        pet.sleep < 30 -> true   // 疲劳
-                        pet.happiness < 30 -> true  // 不开心
-                        else -> false
-                    }
+                // 一般低状态检查（低于30）- 正常频率
+                if (SpeechGenerator.shouldSpeak(lastSpeechTime, minInterval = Constants.Speech.NORMAL_INTERVAL_MS)) {
+                    // 只在健康值低时自动说话
+                    val shouldAutoSpeak = pet.health < Constants.Speech.LOW_HEALTH_THRESHOLD
                     
                     if (shouldAutoSpeak) {
                         val speech = SpeechGenerator.generateSpeech(pet)

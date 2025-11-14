@@ -233,16 +233,10 @@ object SpeechGenerator {
             trigger != null -> getSpeechByTrigger(trigger)
             
             // ⭐ 优先检查紧急状态（低于20）- 宠物会主动紧急提醒
-            pet.hunger < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryHungryPhrases.random()
-            pet.thirst < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryThirstyPhrases.random()
-            pet.sleep < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryTiredPhrases.random()
-            pet.happiness < Constants.HealthThresholds.LOW_STATUS_ALERT_THRESHOLD -> veryUnhappyPhrases.random()
+            pet.health < Constants.HealthThresholds.SLEEP_THRESHOLD -> veryTiredPhrases.random()
             
             // 然后检查一般低状态（低于30）
-            pet.hunger < 30 -> hungryPhrases.random()
-            pet.thirst < 30 -> thirstyPhrases.random()
-            pet.sleep < 30 -> tiredPhrases.random()
-            pet.happiness < 30 -> unhappyPhrases.random()
+            pet.health < 30 -> tiredPhrases.random()
             pet.state == PetState.HAPPY -> happyPhrases.random()
             pet.state == PetState.SLEEP -> sleepPhrases.random()
             pet.state == PetState.SAD -> unhappyPhrases.random()

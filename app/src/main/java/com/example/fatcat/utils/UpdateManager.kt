@@ -58,6 +58,9 @@ class UpdateManager(private val context: Context) {
     private var downloadId: Long = -1L
     private val prefs: SharedPreferences = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
     
+    // BroadcastReceiver 引用，用于注销
+    private var downloadReceiver: BroadcastReceiver? = null
+    
     // 下载进度状态
     private val _downloadProgress = MutableStateFlow(0)
     val downloadProgress: StateFlow<Int> = _downloadProgress
@@ -93,8 +96,8 @@ class UpdateManager(private val context: Context) {
             connection.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
             connection.setRequestProperty("Pragma", "no-cache")
             connection.setRequestProperty("Expires", "0")
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
+            connection.connectTimeout = Constants.Update.CONNECT_TIMEOUT_MS.toInt()
+            connection.readTimeout = Constants.Update.READ_TIMEOUT_MS.toInt()
             
             val versionJson = connection.inputStream.bufferedReader().use { it.readText() }
             android.util.Log.d("UpdateManager", "📥 获取到的version.json: $versionJson")
@@ -190,13 +193,16 @@ class UpdateManager(private val context: Context) {
      * 注册下载完成广播接收器
      */
     private fun registerDownloadReceiver(apkFile: File) {
-        val receiver = object : BroadcastReceiver() {
+        // 如果已有接收器，先注销
+        unregisterDownloadReceiver()
+        
+        downloadReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                 if (id == downloadId) {
                     // 下载完成，安装APK
                     installApk(apkFile)
-                    context.unregisterReceiver(this)
+                    unregisterDownloadReceiver()
                 }
             }
         }
@@ -208,11 +214,30 @@ class UpdateManager(private val context: Context) {
             0
         }
         
-        context.registerReceiver(
-            receiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            flags
-        )
+        try {
+            context.registerReceiver(
+                downloadReceiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                flags
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("UpdateManager", "注册广播接收器失败", e)
+            downloadReceiver = null
+        }
+    }
+    
+    /**
+     * 注销下载完成广播接收器
+     */
+    private fun unregisterDownloadReceiver() {
+        downloadReceiver?.let { receiver ->
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                android.util.Log.w("UpdateManager", "注销广播接收器失败", e)
+            }
+            downloadReceiver = null
+        }
     }
     
     /**
@@ -491,7 +516,7 @@ class UpdateManager(private val context: Context) {
                 cursor.close()
                 
                 if (downloading) {
-                    delay(500) // 每500毫秒更新一次进度
+                    delay(Constants.Update.DOWNLOAD_PROGRESS_INTERVAL_MS)
                 }
             }
         }

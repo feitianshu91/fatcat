@@ -1,5 +1,6 @@
 package com.example.fatcat.ui.pet
 
+import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.fatcat.R
 import com.example.fatcat.model.PetGender
 import com.example.fatcat.model.PetState
@@ -293,7 +295,7 @@ fun PetMainScreen(
             }
         }
         
-        // 健康值显示
+        // 健康状态显示（v4.1更新 - 显示饱腹值、口渴值、开心值、睡眠值）
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -301,10 +303,13 @@ fun PetMainScreen(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                HealthBar("饥饿", pet.hunger)
-                HealthBar("口渴", pet.thirst)
-                HealthBar("睡眠", pet.sleep)
-                HealthBar("快乐", pet.happiness)
+                HealthBar("饱腹值", pet.satiety)
+                Spacer(modifier = Modifier.height(8.dp))
+                HealthBar("口渴值", pet.thirst)
+                Spacer(modifier = Modifier.height(8.dp))
+                HealthBar("开心值", pet.happiness)
+                Spacer(modifier = Modifier.height(8.dp))
+                HealthBar("睡眠值", pet.sleep)
             }
         }
         
@@ -345,7 +350,11 @@ fun PetMainScreen(
                                 // 重启服务以应用新大小
                                 val intent = android.content.Intent(context, com.example.fatcat.service.FloatingPetService::class.java)
                                 context.stopService(intent)
-                                context.startForegroundService(intent)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    ContextCompat.startForegroundService(context, intent)
+                                } else {
+                                    context.startService(intent)
+                                }
                             },
                             modifier = Modifier.weight(1f),
                             colors = if (currentPetSize == size) {
@@ -730,15 +739,17 @@ fun PetMainScreen(
                 }
                 
                 // 更新对话框
-                if (showUpdateDialog && updateInfo != null) {
-                    UpdateDialog(
-                        appVersion = updateInfo!!,
-                        updateManager = updateManager,
-                        onDismiss = { 
-                            showUpdateDialog = false
-                            updateInfo = null
-                        }
-                    )
+                updateInfo?.let { version ->
+                    if (showUpdateDialog) {
+                        UpdateDialog(
+                            appVersion = version,
+                            updateManager = updateManager,
+                            onDismiss = { 
+                                showUpdateDialog = false
+                                updateInfo = null
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -777,15 +788,17 @@ fun PetMainScreen(
     }
     
     // 升级提示对话框
-    if (showLevelUpDialog && levelUpInfo != null) {
-        LevelUpDialog(
-            oldLevel = levelUpInfo!!.first,
-            newLevel = levelUpInfo!!.second,
-            onDismiss = {
-                showLevelUpDialog = false
-                levelUpInfo = null
-            }
-        )
+    levelUpInfo?.let { (oldLevel, newLevel) ->
+        if (showLevelUpDialog) {
+            LevelUpDialog(
+                oldLevel = oldLevel,
+                newLevel = newLevel,
+                onDismiss = {
+                    showLevelUpDialog = false
+                    levelUpInfo = null
+                }
+            )
+        }
     }
     
     // 编辑对话框

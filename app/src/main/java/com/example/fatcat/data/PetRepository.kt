@@ -23,6 +23,13 @@ class PetRepository private constructor(
     private val _pet = MutableStateFlow(dataSource.loadPet())
     val pet: StateFlow<Pet> = _pet.asStateFlow()
     
+    // 累积小数，用于精确计算衰减（v4.1修复）
+    private var satietyAccumulator: Float = 0f    // 饱腹值累积小数
+    private var thirstAccumulator: Float = 0f     // 口渴值累积小数
+    private var happinessAccumulator: Float = 0f  // 开心值累积小数
+    private var sleepAccumulator: Float = 0f      // 睡眠值衰减累积小数
+    private var sleepRecoveryAccumulator: Float = 0f // 睡眠值恢复累积小数
+    
     companion object {
         @Volatile
         private var INSTANCE: PetRepository? = null
@@ -51,164 +58,189 @@ class PetRepository private constructor(
     }
     
     /**
-     * 更新宠物健康值
-     * @param hunger 饥饿值（0-100）
-     * @param thirst 口渴值（0-100）
-     * @param sleep 睡眠值（0-100）
-     * @param happiness 快乐值（0-100）
+     * 更新宠物健康值（v4.0简化版）
+     * @param health 健康值（0-100）
      */
-    fun updateHealth(
-        hunger: Int? = null, 
-        thirst: Int? = null, 
-        sleep: Int? = null, 
-        happiness: Int? = null
-    ) {
+    fun updateHealth(health: Int? = null) {
         val currentPet = _pet.value
-        savePet(currentPet.copy(
-            hunger = hunger?.coerceIn(
-                Constants.PetDefaults.MIN_HEALTH_VALUE, 
-                Constants.PetDefaults.MAX_HEALTH_VALUE
-            ) ?: currentPet.hunger,
-            thirst = thirst?.coerceIn(
-                Constants.PetDefaults.MIN_HEALTH_VALUE, 
-                Constants.PetDefaults.MAX_HEALTH_VALUE
-            ) ?: currentPet.thirst,
-            sleep = sleep?.coerceIn(
-                Constants.PetDefaults.MIN_HEALTH_VALUE, 
-                Constants.PetDefaults.MAX_HEALTH_VALUE
-            ) ?: currentPet.sleep,
-            happiness = happiness?.coerceIn(
-                Constants.PetDefaults.MIN_HEALTH_VALUE, 
-                Constants.PetDefaults.MAX_HEALTH_VALUE
-            ) ?: currentPet.happiness
-        ))
+        if (health != null) {
+            savePet(currentPet.copy(
+                health = health.coerceIn(
+                    Constants.PetDefaults.MIN_HEALTH_VALUE, 
+                    Constants.PetDefaults.MAX_HEALTH_VALUE
+                )
+            ))
+        }
+    }
+    
+    private fun wakeFromForcedSleepIfNeeded(pet: Pet, newState: PetState = PetState.NORMAL): Pet {
+        return pet.copy(
+            isUserForcedSleep = false,
+            forcedSleepStart = 0L,
+            state = newState
+        )
     }
     
     /**
-     * 摸头互动
+     * 摸头互动（v4.1更新）
      * 如果宠物正在用户强制睡眠中，摸头会唤醒宠物
+     * 摸头会增加开心值
      */
     fun patHead() {
         val currentPet = _pet.value
         
         // 如果是用户强制睡眠，摸头会唤醒宠物
         if (currentPet.isUserForcedSleep && currentPet.state == PetState.SLEEP) {
-            savePet(currentPet.copy(
-                isUserForcedSleep = false,
-                state = PetState.NORMAL,
+            val awakenedPet = wakeFromForcedSleepIfNeeded(currentPet).copy(
                 happiness = (currentPet.happiness + Constants.InteractionRewards.PAT_HEAD_HAPPINESS)
                     .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
-            ))
+            )
+            savePet(awakenedPet)
+            updateState(PetState.HAPPY)
         } else {
-            // 正常摸头增加快乐值
-            updateHealth(happiness = currentPet.happiness + Constants.InteractionRewards.PAT_HEAD_HAPPINESS)
+            // 正常摸头增加开心值
+            val newHappiness = (currentPet.happiness + Constants.InteractionRewards.PAT_HEAD_HAPPINESS)
+                .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            savePet(currentPet.copy(happiness = newHappiness))
             updateState(PetState.HAPPY)
         }
     }
     
     /**
-     * 拥抱互动
+     * 拥抱互动（v4.1更新）
+     * 拥抱会增加开心值
      */
     fun hug() {
         val currentPet = _pet.value
-        updateHealth(happiness = currentPet.happiness + Constants.InteractionRewards.HUG_HAPPINESS)
+        
+        if (currentPet.isUserForcedSleep && currentPet.state == PetState.SLEEP) {
+            val awakenedPet = wakeFromForcedSleepIfNeeded(currentPet).copy(
+                happiness = (currentPet.happiness + Constants.InteractionRewards.HUG_HAPPINESS)
+                    .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            )
+            savePet(awakenedPet)
+            updateState(PetState.HAPPY)
+            return
+        }
+        
+        val newHappiness = (currentPet.happiness + Constants.InteractionRewards.HUG_HAPPINESS)
+            .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+        savePet(currentPet.copy(happiness = newHappiness))
         updateState(PetState.HAPPY)
     }
     
     /**
-     * 喂食
+     * 喂食（v4.1更新）
+     * 喂食会增加饱腹值
      */
     fun feed() {
         val currentPet = _pet.value
-        updateHealth(hunger = currentPet.hunger + Constants.InteractionRewards.FEED_HUNGER)
+        
+        if (currentPet.isUserForcedSleep && currentPet.state == PetState.SLEEP) {
+            val awakenedPet = wakeFromForcedSleepIfNeeded(currentPet).copy(
+                satiety = (currentPet.satiety + Constants.InteractionRewards.FEED_SATIETY)
+                    .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            )
+            savePet(awakenedPet)
+            return
+        }
+        
+        val newSatiety = (currentPet.satiety + Constants.InteractionRewards.FEED_SATIETY)
+            .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+        savePet(currentPet.copy(satiety = newSatiety))
     }
     
     /**
-     * 喂水
+     * 喂水（v4.1更新）
+     * 喂水会增加口渴值
      */
     fun feedWater() {
         val currentPet = _pet.value
-        updateHealth(thirst = currentPet.thirst + Constants.InteractionRewards.FEED_WATER_THIRST)
+        
+        if (currentPet.isUserForcedSleep && currentPet.state == PetState.SLEEP) {
+            val awakenedPet = wakeFromForcedSleepIfNeeded(currentPet).copy(
+                thirst = (currentPet.thirst + Constants.InteractionRewards.FEED_WATER_THIRST)
+                    .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            )
+            savePet(awakenedPet)
+            return
+        }
+        
+        val newThirst = (currentPet.thirst + Constants.InteractionRewards.FEED_WATER_THIRST)
+            .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+        savePet(currentPet.copy(thirst = newThirst))
     }
     
     /**
-     * 用户强制宠物睡觉
-     * 宠物会一直睡到精力值满（100）才起床
+     * 用户强制宠物睡觉（v4.0简化版）
+     * 宠物会一直睡到健康值满（100）才起床
      */
     fun forceSleep() {
         val currentPet = _pet.value
         savePet(currentPet.copy(
             state = PetState.SLEEP,
-            isUserForcedSleep = true
+            isUserForcedSleep = true,
+            forcedSleepStart = System.currentTimeMillis()
         ))
     }
     
     /**
-     * 自动更新宠物状态（根据健康值）
+     * 自动更新宠物状态（根据健康值）（v4.0简化版）
      */
     fun autoUpdateState() {
         val currentPet = _pet.value
         
-        // ⭐ 用户强制睡眠：宠物会一直睡到精力值满（100）才起床
+        // ⭐ 用户强制睡眠：宠物会一直睡到健康值满（100）才起床
         if (currentPet.isUserForcedSleep && currentPet.state == PetState.SLEEP) {
-            // 检查是否精力值已满
-            if (currentPet.sleep >= Constants.PetDefaults.MAX_HEALTH_VALUE) {
-                // 精力值满了，可以醒来
-                savePet(currentPet.copy(
-                    isUserForcedSleep = false,
-                    state = PetState.NORMAL
-                ))
+            val forcedStart = currentPet.forcedSleepStart
+            val elapsed = if (forcedStart > 0L) {
+                System.currentTimeMillis() - forcedStart
+            } else {
+                Long.MAX_VALUE
+            }
+            val hasSleptLongEnough = elapsed >= Constants.Sleep.FORCED_SLEEP_MIN_DURATION_MS
+            
+            if (currentPet.health >= Constants.PetDefaults.MAX_HEALTH_VALUE && hasSleptLongEnough) {
+                val awakenedPet = wakeFromForcedSleepIfNeeded(currentPet)
+                savePet(awakenedPet)
             }
             // 否则继续睡觉，不做任何状态改变
             return
         }
         
-        // 强制睡觉：精力值低于临界值时，强制进入睡眠状态
-        if (currentPet.sleep < Constants.HealthThresholds.SLEEP_THRESHOLD_CRITICAL) {
+        // 强制睡觉：健康值低于临界值时，强制进入睡眠状态
+        if (currentPet.health < Constants.HealthThresholds.SLEEP_THRESHOLD) {
             if (currentPet.state != PetState.SLEEP) {
                 updateState(PetState.SLEEP)
             }
             return
         }
         
-        // 睡眠恢复中：精力值在临界值和恢复值之间，保持睡眠直到恢复
-        if (currentPet.sleep < Constants.HealthThresholds.SLEEP_THRESHOLD_RECOVER 
+        // 睡眠恢复中：健康值在临界值和恢复值之间，保持睡眠直到恢复
+        if (currentPet.health < Constants.HealthThresholds.RECOVER_THRESHOLD 
             && currentPet.state == PetState.SLEEP) {
             // 继续睡觉，不改变状态
             return
         }
         
-        // 普通睡眠：精力值较低时进入睡眠
-        if (currentPet.sleep < Constants.HealthThresholds.SLEEP_THRESHOLD_LOW 
-            && currentPet.state != PetState.SLEEP) {
-            updateState(PetState.SLEEP)
-            return
-        }
-        
         // 已经睡够了，可以醒来
-        if (currentPet.sleep >= Constants.HealthThresholds.SLEEP_THRESHOLD_RECOVER 
+        if (currentPet.health >= Constants.HealthThresholds.RECOVER_THRESHOLD 
             && currentPet.state == PetState.SLEEP) {
             updateState(PetState.NORMAL)
             return
         }
         
-        // 根据快乐值决定表情
-        if (currentPet.happiness < Constants.HealthThresholds.HAPPINESS_THRESHOLD_LOW 
-            && currentPet.state != PetState.SAD) {
-            updateState(PetState.SAD)
-            return
-        }
-        
-        if (currentPet.happiness > Constants.HealthThresholds.HAPPINESS_THRESHOLD_HIGH 
-            && currentPet.state != PetState.HAPPY) {
-            updateState(PetState.HAPPY)
+        // 疲惫状态：健康值在20-50之间，进入疲惫状态
+        if (currentPet.health < Constants.HealthThresholds.TIRED_THRESHOLD 
+            && currentPet.health >= Constants.HealthThresholds.SLEEP_THRESHOLD
+            && currentPet.state != PetState.DAZE) {
+            updateState(PetState.DAZE)
             return
         }
         
         // 默认状态（随机切换常态和发呆）
-        // 只有在精力值充足时才会在常态和发呆之间切换
-        if (currentPet.sleep >= Constants.HealthThresholds.SLEEP_THRESHOLD_RECOVER 
-            && currentPet.happiness in Constants.HealthThresholds.HAPPINESS_THRESHOLD_LOW..Constants.HealthThresholds.HAPPINESS_THRESHOLD_HIGH) {
+        // 只有在健康值充足时才会在常态和发呆之间切换
+        if (currentPet.health >= Constants.HealthThresholds.RECOVER_THRESHOLD) {
             val random = (System.currentTimeMillis() / Constants.UpdateConfig.UPDATE_INTERVAL_MS) % 2
             if (random == 0L && currentPet.state != PetState.DAZE) {
                 updateState(PetState.DAZE)
@@ -219,61 +251,134 @@ class PetRepository private constructor(
     }
     
     /**
-     * 应用健康值衰减
-     * @param isMoving 是否正在移动（移动时衰减更快）
+     * 应用健康值衰减（v4.1更新）
+     * 规则：
+     * - 健康值：每5秒减少，移动时减少更多，睡觉时恢复
+     * - 饱腹值：每5秒减少0.0694点（100→0需要2小时）
+     * - 口渴值：每5秒减少0.0926点（100→0需要1.5小时）
+     * - 开心值：每5秒减少0.1389点（100→0需要1小时）
+     * - 睡眠值：每5秒减少0.0347点（100→0需要4小时）
+     * - 睡眠时：健康值和睡眠值都会逐步恢复
      */
     fun applyHealthDecay(isMoving: Boolean = false) {
         val pet = _pet.value
         
-        // 睡眠状态：恢复精力值，但口渴和饥饿会缓慢下降（符合现实）⭐
+        android.util.Log.d("PetRepository", "=== 状态值衰减 ===")
+        android.util.Log.d("PetRepository", "当前状态: ${pet.state}, 健康值: ${pet.health}, 饱腹值: ${pet.satiety}, 口渴值: ${pet.thirst}, 开心值: ${pet.happiness}, 睡眠值: ${pet.sleep}, 是否移动: $isMoving")
+        
+        // 睡眠状态：恢复健康值，其他状态值不变
         if (pet.state == PetState.SLEEP) {
-            updateHealth(
-                sleep = (pet.sleep + Constants.UpdateConfig.SLEEP_RECOVERY_RATE).toInt()
-                    .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE),  // 睡觉时精力恢复
-                thirst = (pet.thirst - Constants.UpdateConfig.THIRST_DECAY_RATE_SLEEP).toInt()  // ⭐ 睡眠时呼吸失水
-                    .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                hunger = (pet.hunger - Constants.UpdateConfig.HUNGER_DECAY_RATE_SLEEP).toInt()  // ⭐ 睡眠时基础代谢
-                    .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
-                // 快乐值不变（睡眠不影响情绪）
+            val newHealth = (pet.health + Constants.UpdateConfig.HEALTH_RECOVERY_RATE)
+                .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            
+            // 睡眠中恢复睡眠值（带小数累积）
+            sleepAccumulator = 0f // 清零衰减累积，避免苏醒后突降
+            sleepRecoveryAccumulator += Constants.UpdateConfig.SLEEP_RECOVERY_RATE
+            val sleepIncrease = sleepRecoveryAccumulator.toInt()
+            sleepRecoveryAccumulator -= sleepIncrease.toFloat()
+            val newSleep = (pet.sleep + sleepIncrease)
+                .coerceAtMost(Constants.PetDefaults.MAX_HEALTH_VALUE)
+            
+            android.util.Log.d(
+                "PetRepository",
+                "睡眠中 - 健康值恢复: ${pet.health} → $newHealth，睡眠值恢复: ${pet.sleep} → $newSleep"
             )
+            savePet(pet.copy(
+                health = newHealth,
+                sleep = newSleep
+            ))
         } else {
-            // 根据是否移动选择不同的衰减速率
-            if (isMoving) {
-                // 移动时：精力值下降最快，饥饿和口渴第二，快乐第三
-                updateHealth(
-                    hunger = (pet.hunger - Constants.UpdateConfig.HUNGER_DECAY_RATE_MOVING).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    thirst = (pet.thirst - Constants.UpdateConfig.THIRST_DECAY_RATE_MOVING).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    sleep = (pet.sleep - Constants.UpdateConfig.SLEEP_DECAY_RATE_MOVING).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    happiness = (pet.happiness - Constants.UpdateConfig.HAPPINESS_DECAY_RATE_MOVING).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
-                )
-            } else {
-                // 静止时：缓慢衰减（为移动速率的30%）
-                // 这样即使用户息屏一天，宠物也会有明显的状态变化
-                updateHealth(
-                    hunger = (pet.hunger - Constants.UpdateConfig.HUNGER_DECAY_RATE_IDLE).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    thirst = (pet.thirst - Constants.UpdateConfig.THIRST_DECAY_RATE_IDLE).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    sleep = (pet.sleep - Constants.UpdateConfig.SLEEP_DECAY_RATE_IDLE).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE),
-                    happiness = (pet.happiness - Constants.UpdateConfig.HAPPINESS_DECAY_RATE_IDLE).toInt()
-                        .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
-                )
-            }
+            // 非睡眠状态：所有状态值都衰减
+            val newHealth = calculateHealthDecay(pet.health, isMoving)
+            
+            // 饱腹值：持续衰减（100→0需要2小时）- 使用累积小数机制
+            val (newSatiety, newSatietyAccumulator) = calculateValueDecay(
+                currentValue = pet.satiety,
+                accumulator = satietyAccumulator,
+                decayRate = Constants.UpdateConfig.SATIETY_DECAY_RATE
+            )
+            satietyAccumulator = newSatietyAccumulator
+            
+            // 口渴值：持续衰减（100→0需要1.5小时）- 使用累积小数机制
+            val (newThirst, newThirstAccumulator) = calculateValueDecay(
+                currentValue = pet.thirst,
+                accumulator = thirstAccumulator,
+                decayRate = Constants.UpdateConfig.THIRST_DECAY_RATE
+            )
+            thirstAccumulator = newThirstAccumulator
+            
+            // 开心值：持续衰减（100→0需要1小时）- 使用累积小数机制
+            val (newHappiness, newHappinessAccumulator) = calculateValueDecay(
+                currentValue = pet.happiness,
+                accumulator = happinessAccumulator,
+                decayRate = Constants.UpdateConfig.HAPPINESS_DECAY_RATE
+            )
+            happinessAccumulator = newHappinessAccumulator
+            
+            // 睡眠值：持续衰减（100→0需要4小时）- 使用累积小数机制
+            sleepRecoveryAccumulator = 0f // 清零恢复累积，避免醒来后突增
+            val (newSleep, newSleepAccumulator) = calculateValueDecay(
+                currentValue = pet.sleep,
+                accumulator = sleepAccumulator,
+                decayRate = Constants.UpdateConfig.SLEEP_DECAY_RATE
+            )
+            sleepAccumulator = newSleepAccumulator
+            
+            android.util.Log.d("PetRepository", "非睡眠状态 - 状态值减少: 健康值 ${pet.health} → $newHealth, 饱腹值 ${pet.satiety} → $newSatiety, 口渴值 ${pet.thirst} → $newThirst, 开心值 ${pet.happiness} → $newHappiness, 睡眠值 ${pet.sleep} → $newSleep")
+            
+            savePet(pet.copy(
+                health = newHealth,
+                satiety = newSatiety,
+                thirst = newThirst,
+                happiness = newHappiness,
+                sleep = newSleep
+            ))
         }
     }
     
     /**
-     * 检查宠物是否可以移动
-     * 只有在常态时且精力值足够时才能移动
+     * 计算健康值衰减
+     * @param currentHealth 当前健康值
+     * @param isMoving 是否正在移动
+     * @return 衰减后的健康值
+     */
+    private fun calculateHealthDecay(currentHealth: Int, isMoving: Boolean): Int {
+        val healthDecayRate = if (isMoving) {
+            (Constants.UpdateConfig.HEALTH_DECAY_RATE * 1.5f).toInt()  // 移动时减少更多（1.5倍）
+        } else {
+            Constants.UpdateConfig.HEALTH_DECAY_RATE  // 静止时正常减少
+        }
+        return (currentHealth - healthDecayRate)
+            .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
+    }
+    
+    /**
+     * 计算状态值衰减（带累积小数机制）
+     * @param currentValue 当前值
+     * @param accumulator 累积小数
+     * @param decayRate 衰减速率
+     * @return Pair<新值, 新累积小数>
+     */
+    private fun calculateValueDecay(
+        currentValue: Int,
+        accumulator: Float,
+        decayRate: Float
+    ): Pair<Int, Float> {
+        var newAccumulator = accumulator + decayRate
+        val decrease = newAccumulator.toInt()  // 取出整数部分
+        newAccumulator -= decrease.toFloat()   // 保留小数部分
+        val newValue = (currentValue - decrease)
+            .coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
+        return Pair(newValue, newAccumulator)
+    }
+    
+    /**
+     * 检查宠物是否可以移动（v4.0简化版）
+     * 只有在常态时且健康值足够时才能移动
      */
     fun canMove(): Boolean {
         val pet = _pet.value
-        return pet.state == PetState.NORMAL && pet.sleep >= Constants.HealthThresholds.MOVE_THRESHOLD
+        return pet.state == PetState.NORMAL && pet.health >= Constants.HealthThresholds.MOVE_THRESHOLD
     }
     
     /**
@@ -339,12 +444,9 @@ class PetRepository private constructor(
             newLevel++
             leveledUp = true
             
-            // 升级时恢复所有属性到最大值
+            // 升级时恢复健康值到最大值
             _pet.value = currentPet.copy(
-                hunger = Constants.PetDefaults.MAX_HEALTH_VALUE,
-                thirst = Constants.PetDefaults.MAX_HEALTH_VALUE,
-                sleep = Constants.PetDefaults.MAX_HEALTH_VALUE,
-                happiness = Constants.PetDefaults.MAX_HEALTH_VALUE,
+                health = Constants.PetDefaults.MAX_HEALTH_VALUE,
                 level = newLevel,
                 exp = newExp
             )
@@ -405,9 +507,9 @@ class PetRepository private constructor(
             )
         }
         
-        // 消耗精力值
-        val newSleep = (currentPet.sleep - energyCost).coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
-        _pet.value = currentPet.copy(sleep = newSleep)
+        // 消耗健康值
+        val newHealth = (currentPet.health - energyCost).coerceAtLeast(Constants.PetDefaults.MIN_HEALTH_VALUE)
+        _pet.value = currentPet.copy(health = newHealth)
         dataSource.savePet(_pet.value)
         
         // 添加经验值并检查是否升级

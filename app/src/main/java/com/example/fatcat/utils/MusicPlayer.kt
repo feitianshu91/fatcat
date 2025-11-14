@@ -115,11 +115,31 @@ class MusicPlayer private constructor(private val context: Context) {
      */
     fun stop() {
         try {
-            mediaPlayer?.let {
-                if (it.isPlaying) {
-                    it.stop()
+            mediaPlayer?.let { player ->
+                try {
+                    // 如果正在播放，先停止
+                    if (player.isPlaying) {
+                        player.stop()
+                    } else if (isPaused) {
+                        // 如果已暂停，先reset（避免在pause状态下调用stop会抛异常）
+                        player.reset()
+                    }
+                } catch (e: IllegalStateException) {
+                    // MediaPlayer 可能已经处于错误状态，直接reset
+                    try {
+                        player.reset()
+                    } catch (resetEx: Exception) {
+                        Log.w(TAG, "Error resetting MediaPlayer", resetEx)
+                    }
                 }
-                it.release()
+                
+                // 释放资源
+                try {
+                    player.release()
+                } catch (releaseEx: Exception) {
+                    Log.w(TAG, "Error releasing MediaPlayer", releaseEx)
+                }
+                
                 mediaPlayer = null
                 isPlaying = false
                 isPaused = false
@@ -128,6 +148,11 @@ class MusicPlayer private constructor(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping music", e)
+            // 确保状态重置
+            mediaPlayer = null
+            isPlaying = false
+            isPaused = false
+            currentResId = -1
         }
     }
     
